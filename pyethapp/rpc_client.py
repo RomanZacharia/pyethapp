@@ -23,6 +23,9 @@ from pyethapp.jsonrpc import (
 # pylint: disable=invalid-name,too-many-arguments,too-few-public-methods
 # The number of arguments an it's names are determined by the JSON-RPC spec
 
+
+DEFAULT_TX_GAS = 3141591  # genesis block gasLimit - 1
+
 z_address = '\x00' * 20
 log = logging.getLogger(__name__)
 
@@ -116,13 +119,14 @@ class JSONRPCClientReplyError(Exception):
 class JSONRPCClient(object):
     protocol = JSONRPCProtocol()
 
-    def __init__(self, host='127.0.0.1', port=4000, print_communication=True, privkey=None, sender=None):
+    def __init__(self, host='127.0.0.1', port=4000, print_communication=True, privkey=None, sender=None, default_tx_gas=None):
         "specify privkey for local signing"
         self.transport = HttpPostClientTransport('http://{}:{}'.format(host, port))
         self.print_communication = print_communication
         self.privkey = privkey
         self._sender = sender
         self.port = port
+        self._default_tx_gas = default_tx_gas
 
     def __repr__(self):
         return '<JSONRPCClient @%d>' % self.port
@@ -141,6 +145,20 @@ class JSONRPCClient(object):
     def coinbase(self):
         """ Return the client coinbase address. """
         return address_decoder(self.call('eth_coinbase'))
+    
+    @property
+    def default_tx_gas(self):
+        if self._default_tx_gas:
+            return self._default_tx_gas
+        else:
+            return DEFAULT_TX_GAS
+
+    def call(self, method, *args):
+        request = self.protocol.create_request(method, args)
+        reply = self.transport.send_message(request.serialize())
+        if self.print_communication:
+            print json.dumps(json.loads(request.serialize()), indent=2)
+            print reply
 
     def blocknumber(self):
         """ Return the most recent block. """
@@ -362,15 +380,14 @@ class JSONRPCClient(object):
         locally sign the transaction. This requires an extended server
         implementation that accepts the variables v, r, and s.
         """
-
         if not self.privkey and not sender:
             raise ValueError('Either privkey or sender needs to be supplied.')
 
         if self.privkey and not sender:
             sender = privtoaddr(self.privkey)
 
-            if nonce is None:
-                nonce = self.nonce(sender)
+        if nonce is None:
+            nonce = self.nonce(sender)
         elif self.privkey:
             if sender != privtoaddr(self.privkey):
                 raise ValueError('sender for a different privkey.')
@@ -382,7 +399,7 @@ class JSONRPCClient(object):
                 nonce = 0
 
         if not startgas:
-            startgas = self.gaslimit() - 1
+            startgas = self.default_tx_gas
 
         tx = Transaction(nonce, gasprice, startgas, to=to, value=value, data=data)
 
