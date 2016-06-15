@@ -62,7 +62,7 @@ def test_eth(test_setup):
         'eth_getFilterLogs PYTHON should return a list of anonymous logs, when filtering by topic "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff":',
         'eth_getFilterLogs PYTHON should return a list of logs, when filtering by topic "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff":',
         # The following error is fixed in the PR rpc-tests#9
-        # 'eth_getTransactionByBlockNumberAndIndex PYTHON should return transactions for the pending block when using "pending" and sending transactions before:',
+        'eth_getTransactionByBlockNumberAndIndex PYTHON should return transactions for the pending block when using "pending" and sending transactions before:',
         'eth_uninstallFilter PYTHON should return a boolean when uninstalling a block filter:']
 
     (test_app, rpc_tests_dir) = test_setup
