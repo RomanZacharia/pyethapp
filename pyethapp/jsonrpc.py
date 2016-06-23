@@ -53,6 +53,42 @@ if PROPAGATE_ERRORS:
     RPCDispatcher._dispatch = _fail_on_error_dispatch
 
 
+class EthRPCErrorResponse(JSONRPCErrorResponse):
+    edata = []
+
+    def _to_dict(self):
+        return {
+            'jsonrpc': JSONRPCProtocol.JSON_RPC_VERSION,
+            'id': self.unique_id,
+            'error': {
+                'message': str(self.error),
+                'code': self._jsonrpc_error_code,
+                'data': self.edata
+            }
+        }
+
+    def add_extended_error(self, code, message, reason):
+        self.edata.append({'code': str(code), 'message': message, 'reason': reason})
+
+
+def _error_respond(ctx, error, data = []):
+    if not ctx.unique_id:
+        return None
+
+    response = EthRPCErrorResponse()
+
+    code, msg = _get_code_and_message(error)
+
+    response.error = msg
+    response.unique_id = ctx.unique_id
+    response._jsonrpc_error_code = code
+    response.data = data
+    return response
+
+
+JSONRPCRequest.error_respond = _error_respond
+
+
 # route logging messages
 
 
