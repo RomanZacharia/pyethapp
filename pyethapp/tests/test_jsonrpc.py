@@ -27,10 +27,17 @@ from pyethapp.jsonrpc import Compilers, JSONRPCServer, quantity_encoder, address
 from pyethapp.profiles import PROFILES
 from pyethapp.pow_service import PoWService
 
+from tinyrpc.exc import RPCError
+import json
+
 ethereum.keys.PBKDF2_CONSTANTS['c'] = 100  # faster key derivation
 log = get_logger('test.jsonrpc')  # pylint: disable=invalid-name
-SOLIDITY_AVAILABLE = 'solidity' in Compilers().compilers
 
+SOLIDITY_AVAILABLE = False
+try:
+    SOLIDITY_AVAILABLE = 'solidity' in Compilers().compilers
+except:
+    pass
 
 # EVM code corresponding to the following solidity code:
 #
@@ -51,19 +58,6 @@ LOG_EVM = (
 ).decode('hex')
 
 
-def test_externally():
-    # The results of the external rpc-tests are not evaluated as:
-    #  1) the Whisper protocol is not implemented and its tests fail;
-    #  2) the eth_accounts method should be skipped;
-    #  3) the eth_getFilterLogs fails due to the invalid test data;
-    os.system('''
-        git clone https://github.com/ethereum/rpc-tests;
-        cd rpc-tests;
-        git submodule update --init --recursive;
-        npm install;
-        rm -rf /tmp/rpctests;
-        pyethapp -d /tmp/rpctests -l :info,eth.chainservice:debug,jsonrpc:debug -c jsonrpc.listen_port=8081 -c p2p.max_peers=0 -c p2p.min_peers=0 blocktest lib/tests/BlockchainTests/bcRPC_API_Test.json RPC_API_Test & sleep 60 && make test;
-    ''')
 
 
 @pytest.mark.skipif(not SOLIDITY_AVAILABLE, reason='solidity compiler not available')
@@ -170,6 +164,20 @@ def test_app(request, tmpdir):
             log.debug('got response', response=res)
             return res
 
+        def dispatch(self, message):
+            try:
+                server = JSONRPCServer(self)
+                rpcrequest = server.rpc_server.protocol.parse_request(message)
+                try:
+                    response = server.dispatcher.dispatch(rpcrequest)
+                except Exception as e:
+                    # an error occured within the method, return it
+                    response = rpcrequest.error_respond(e)
+            except RPCError as e:
+                response = e.error_respond()
+            # respond with result`
+            return response._to_dict()
+
     config = {
         'data_dir': str(tmpdir),
         'db': {'implementation': 'EphemDB'},
@@ -223,6 +231,50 @@ def test_app(request, tmpdir):
     log.debug('starting test app')
     app.start()
     return app
+
+
+def test_rpc_errors(test_app):
+
+    reqid = 0
+    chain = test_app.services.chain.chain
+    assert chain.head_candidate.get_balance('\xff' * 20) == 0
+    sender = test_app.services.accounts.unlocked_accounts[0].address
+    assert chain.head_candidate.get_balance(sender) > 0
+    tx = {
+        'from': address_encoder(sender),
+        'to': address_encoder('\xff' * 20),
+        'value': quantity_encoder(1)
+    }
+    # res = data_decoder(test_app.rpc_request('eth_call', tx, 0x1))
+
+    # tr = type(res)
+
+    import pdb; pdb.set_trace()
+
+    # json01 = '{"id":4,"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x6295ee1b4f6dd65047762f924ecd367c17eabf8f","data":"0x12a7b914"},"0x8"]}'
+    # json01 = '{"id":4,"jsonrpc":"2.0","method":"eth_sendTransaction","params":['+json.dumps(tx)+']}'
+    reqid += 1
+    json02 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params":
+            [
+                {
+                    'from': address_encoder(sender),
+                    'to': address_encoder('\xff' * 20),
+                    'gasPrice': '0x999999999999999999999999999999999999999999',
+                    'value': quantity_encoder(100),
+                    'data': '12345'
+                }
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json02))
+
+    assert response['error']['code'] == 3
+    assert response['error']['data'][0]['code'] == 104
+    # res = data_decoder(test_app.rpc_request('eth_getTransactionByHash', 0x1))
+
 
 
 def test_send_transaction(test_app):

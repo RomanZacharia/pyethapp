@@ -21,8 +21,9 @@ import gevent.queue
 import rlp
 from tinyrpc.dispatch import RPCDispatcher
 from tinyrpc.dispatch import public as public_
-from tinyrpc.exc import BadRequestError, MethodNotFoundError
-from tinyrpc.protocols.jsonrpc import JSONRPCProtocol, JSONRPCInvalidParamsError
+from tinyrpc.exc import BadRequestError, MethodNotFoundError, RPCError
+from tinyrpc.protocols.jsonrpc import JSONRPCProtocol, JSONRPCInvalidParamsError, JSONRPCRequest,\
+    JSONRPCErrorResponse, _get_code_and_message, FixedErrorMessageMixin
 from tinyrpc.server.gevent import RPCServerGreenlets
 from tinyrpc.transports.wsgi import WsgiServerTransport
 from tinyrpc.transports import ServerTransport
@@ -35,6 +36,7 @@ from accounts import Account
 from ipc_rpc import bind_unix_listener, serve
 
 from ethereum.utils import int32
+from ethereum.exceptions import InvalidTransaction
 
 logger = log = slogging.get_logger('jsonrpc')
 
@@ -51,6 +53,60 @@ def _fail_on_error_dispatch(self, request):
 
 if PROPAGATE_ERRORS:
     RPCDispatcher._dispatch = _fail_on_error_dispatch
+
+
+class ExecutionError(RPCError):
+    """An execution error in the RPC system occured."""
+
+
+class JSONRPCExecutionError(FixedErrorMessageMixin, ExecutionError):
+    jsonrpc_error_code = 3
+    message = 'Execution error'
+
+
+
+class InsufficientGasError(JSONRPCExecutionError):
+    edata = [
+        {
+            'code': 102,
+            'message': 'Insufficient gas'
+        }
+    ]
+
+
+class GasLimitExceededError(JSONRPCExecutionError):
+    edata = [
+        {
+            'code': 103,
+            'message': 'Gas limit exceeded'
+        }
+    ]
+
+
+class RejectedError(JSONRPCExecutionError):
+    edata = [
+        {
+            'code': 104,
+            'message': 'Rejected: Inappropriate value'
+            # The 'reason' data field might be excessive
+            # 'reason': 'Inappropriate value'
+        }
+    ]
+
+    def __init__(self, message):
+        self.edata[0]['message'] = 'Rejected:' + message
+
+
+def get_code_and_message(error):
+    if isinstance(error, ExecutionError):
+        code = error.jsonrpc_error_code
+        msg = error.message
+
+    else:
+        return _get_code_and_message(error)
+
+    return code, msg
+
 
 
 class EthRPCErrorResponse(JSONRPCErrorResponse):
@@ -71,18 +127,19 @@ class EthRPCErrorResponse(JSONRPCErrorResponse):
         self.edata.append({'code': str(code), 'message': message, 'reason': reason})
 
 
-def _error_respond(ctx, error, data = []):
+def _error_respond(ctx, error):
     if not ctx.unique_id:
         return None
 
     response = EthRPCErrorResponse()
 
-    code, msg = _get_code_and_message(error)
+    code, msg = get_code_and_message(error)
 
     response.error = msg
     response.unique_id = ctx.unique_id
     response._jsonrpc_error_code = code
-    response.data = data
+    if hasattr(error, 'edata'):
+        response.edata = error.edata
     return response
 
 
@@ -375,13 +432,21 @@ class Subdispatcher(object):
         json_rpc_service.dispatcher.register_instance(dispatcher, cls.prefix)
 
 
-def quantity_decoder(data):
+def quantity_decoder(data, name=None):
     """Decode `data` representing a quantity."""
+    if type(data) is dict and name:
+        data = data[name]
     if not is_string(data):
+        if name:
+            raise RejectedError(name + ' value should be a string representing its quantity')
         success = False
     elif not data.startswith('0x'):
+        if name:
+            raise RejectedError(name + ' value must start with 0x prefix')
         success = False  # must start with 0x prefix
     elif len(data) > 3 and data[2] == '0':
+        if name:
+            raise RejectedError(name + ' value  must not have leading zeros (except `0x0`)')
         success = False  # must not have leading zeros (except `0x0`)
     else:
         data = data[2:]
@@ -393,6 +458,8 @@ def quantity_decoder(data):
         except ValueError:
             success = False
     assert not success
+    if name:
+        raise RejectedError('Invalid ' + name + ' value')
     raise BadRequestError('Invalid quantity encoding')
 
 
@@ -1199,15 +1266,15 @@ class Chain(Subdispatcher):
             raise BadRequestError('Transaction must be an object')
         to = address_decoder(data['to'])
         try:
-            startgas = quantity_decoder(data['gas'])
+            startgas = quantity_decoder(data, 'gas')
         except KeyError:
             startgas = test_block.gas_limit - test_block.gas_used
         try:
-            gasprice = quantity_decoder(data['gasPrice'])
+            gasprice = quantity_decoder(data, 'gasPrice')
         except KeyError:
             gasprice = 0
         try:
-            value = quantity_decoder(data['value'])
+            value = quantity_decoder(data, 'value')
         except KeyError:
             value = 0
         try:
@@ -1225,9 +1292,13 @@ class Chain(Subdispatcher):
         tx.sender = sender
 
         try:
+            errmsg = 'Invalid transaction'
             success, output = processblock.apply_transaction(test_block, tx)
-        except processblock.InvalidTransaction:
+        except processblock.InsufficientBalance as e:
+            raise InsufficientGasError()
+        except InvalidTransaction as e:
             success = False
+            errmsg = e.__class__.__name__ + e.message
         # make sure we didn't change the real state
         snapshot_after = block.snapshot()
         assert snapshot_after == snapshot_before
@@ -1236,7 +1307,8 @@ class Chain(Subdispatcher):
         if success:
             return output
         else:
-            return False
+            raise RejectedError(errmsg)
+
 
     @public
     @decode_arg('block_id', block_id_decoder)
