@@ -6,6 +6,19 @@ import time
 from pyethapp.jsonrpc import address_encoder
 from ethereum import utils
 
+def executable_installed(program):
+    import os
+
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+    return None
+
 def prepare_rpc_tests(tmpdir):
     rpc_tests = tmpdir.mkdir('testdata')
 
@@ -30,6 +43,7 @@ def test_setup(request, tmpdir):
     rpc_tests_dir = prepare_rpc_tests(tmpdir)
 
     test_data = rpc_tests_dir.join('lib/tests/BlockchainTests/bcRPC_API_Test.json')
+    assert executable_installed('pyethapp')
     test_app = Popen([
         'pyethapp',
         '-d', str(tmpdir),
