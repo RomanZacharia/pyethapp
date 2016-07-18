@@ -143,7 +143,6 @@ def set_config_param(config, s, strict=True):
         raise ValueError('Invalid config parameter')
     d = config
     for key in keys[:-1]:
-        key = key.strip()
         if strict and key not in d:
             raise KeyError('Unknown config option %s' % param)
         d = d.setdefault(key, {})
