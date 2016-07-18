@@ -4,9 +4,6 @@ import pytest
 from subprocess import Popen
 import time
 from pyethapp.jsonrpc import address_encoder
-#from ethereum.utils import zpad
-from ethereum.tester import a0, a1, a2, a3, a4, a5, a6,a7, a8, a9, k0
-from pyethapp.accounts import Account
 from ethereum import utils
 
 def prepare_rpc_tests(tmpdir):
@@ -14,7 +11,11 @@ def prepare_rpc_tests(tmpdir):
 
     assert Popen(['git', 'clone', 'https://github.com/ethereum/rpc-tests'], cwd=str(rpc_tests)).wait() == 0
     tests_dir = rpc_tests.join('rpc-tests')
+    import os.path
+    fpath = str(tests_dir.join('lib/config.js'))
+    assert os.path.isfile(fpath)
     assert Popen(['git', 'submodule', 'update', '--init', '--recursive'], cwd=str(tests_dir)).wait() == 0
+    assert os.path.isfile(str(tests_dir.join('lib/tests/BlockchainTests/bcRPC_API_Test.json')).decode('unicode-escape'))
     return tests_dir
 
 
@@ -102,7 +103,6 @@ def test_client(test_setup):
     balance2 = client.balance('\xff' * 20)
     assert balance2 == 0
     fid = client.new_filter('pending', 'pending')
-    assert fid == 0
 
     # The following tests require an account with a positive balance
     # accs = client.call('eth_accounts')
