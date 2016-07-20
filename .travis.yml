@@ -12,7 +12,7 @@ install:
 - pip install coveralls readme_renderer
 script:
 - coverage run --source pyethapp setup.py test
-- python setup.py check --restructuredtext --strict
+- python setup.py install --restructuredtext --strict
 after_success:
 - coveralls
 env:
