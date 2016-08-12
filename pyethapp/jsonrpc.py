@@ -64,6 +64,16 @@ class JSONRPCExecutionError(FixedErrorMessageMixin, ExecutionError):
     message = 'Execution error'
 
 
+class NotExistError(JSONRPCExecutionError):
+    edata = [
+        {
+            'code': 100,
+            'message': 'The item does not exist'
+        }
+    ]
+
+    def __init__(self, message):
+        self.edata[0]['message'] = message
 
 class InsufficientGasError(JSONRPCExecutionError):
     edata = [
@@ -88,8 +98,6 @@ class RejectedError(JSONRPCExecutionError):
         {
             'code': 104,
             'message': 'Rejected: Inappropriate value'
-            # The 'reason' data field might be excessive
-            # 'reason': 'Inappropriate value'
         }
     ]
 
@@ -470,8 +478,10 @@ def quantity_encoder(i):
     return '0x' + (encode_hex(data).lstrip('0') or '0')
 
 
-def data_decoder(data):
+def data_decoder(data, name=None):
     """Decode `data` representing unformatted data."""
+    if type(data) is dict and name:
+        data = data[name]
     if not data.startswith('0x'):
         data = '0x' + data
     if len(data) % 2 != 0:
@@ -482,6 +492,8 @@ def data_decoder(data):
     try:
         return decode_hex(data[2:])
     except TypeError:
+        if name:
+            raise RejectedError('Invalid ' + name + ' data hex encoding')
         raise BadRequestError('Invalid data hex encoding', data[2:])
 
 
@@ -498,10 +510,12 @@ def data_encoder(data, length=None):
         return '0x' + s.rjust(length * 2, '0')
 
 
-def address_decoder(data):
+def address_decoder(data, name=None):
     """Decode an address from hex with 0x prefix to 20 bytes."""
-    addr = data_decoder(data)
+    addr = data_decoder(data, name)
     if len(addr) not in (20, 0):
+        if name:
+            raise RejectedError(name + ' address must be 20 or 0 bytes long')
         raise BadRequestError('Addresses must be 20 or 0 bytes long')
     return addr
 
@@ -1173,7 +1187,7 @@ class Chain(Subdispatcher):
 
         def get_data_default(key, decoder, default=None):
             if key in data:
-                return decoder(data[key])
+                return decoder(data, key)
             return default
 
         to = get_data_default('to', address_decoder, b'')
@@ -1198,13 +1212,19 @@ class Chain(Subdispatcher):
             if nonce is None or nonce == 0:
                 nonce = self.app.services.chain.chain.head_candidate.get_nonce(sender)
 
-        tx = Transaction(nonce, gasprice, startgas, to, value, data_, v, r, s)
-        tx._sender = None
-        if not signed:
-            assert sender in self.app.services.accounts, 'can not sign: no account for sender'
-            self.app.services.accounts.sign_tx(sender, tx)
-        self.app.services.chain.add_transaction(tx, origin=None, force_broadcast=True)
-        log.debug('decoded tx', tx=tx.log_dict())
+        try:
+            tx = Transaction(nonce, gasprice, startgas, to, value, data_, v, r, s)
+            tx._sender = None
+            if not signed:
+                assert sender in self.app.services.accounts, 'can not sign: no account for sender'
+                self.app.services.accounts.sign_tx(sender, tx)
+            self.app.services.chain.add_transaction(tx, origin=None, force_broadcast=True)
+            log.debug('decoded tx', tx=tx.log_dict())
+        except InvalidTransaction as e:
+            if 'Startgas too low' in e.message:
+                raise InsufficientGasError()
+            raise
+
         return data_encoder(tx.hash)
 
     @public
@@ -1278,27 +1298,29 @@ class Chain(Subdispatcher):
         except KeyError:
             value = 0
         try:
-            data_ = data_decoder(data['data'])
+            data_ = data_decoder(data, 'data')
         except KeyError:
             data_ = b''
         try:
-            sender = address_decoder(data['from'])
+            sender = address_decoder(data, 'from')
         except KeyError:
             sender = '\x00' * 20
 
-        # apply transaction
-        nonce = test_block.get_nonce(sender)
-        tx = Transaction(nonce, gasprice, startgas, to, value, data_)
-        tx.sender = sender
-
         try:
+            # apply transaction
+            nonce = test_block.get_nonce(sender)
+            tx = Transaction(nonce, gasprice, startgas, to, value, data_)
+            tx.sender = sender
             errmsg = 'Invalid transaction'
             success, output = processblock.apply_transaction(test_block, tx)
-        except processblock.InsufficientBalance as e:
+        except processblock.InsufficientBalance:
             raise InsufficientGasError()
         except InvalidTransaction as e:
+            if 'Startgas too low' in e.message:
+                raise InsufficientGasError()
             success = False
             errmsg = e.__class__.__name__ + e.message
+
         # make sure we didn't change the real state
         snapshot_after = block.snapshot()
         assert snapshot_after == snapshot_before
@@ -1361,12 +1383,13 @@ class Chain(Subdispatcher):
 
         # apply transaction
         nonce = test_block.get_nonce(sender)
-        tx = Transaction(nonce, gasprice, startgas, to, value, data_)
-        tx.sender = sender
-
         try:
+            tx = Transaction(nonce, gasprice, startgas, to, value, data_)
+            tx.sender = sender
             success, output = processblock.apply_transaction(test_block, tx)
-        except processblock.InvalidTransaction:
+        except processblock.InvalidTransaction as e:
+            if 'Startgas too low' in e.message:
+                raise InsufficientGasError()
             success = False
         # make sure we didn't change the real state
         snapshot_after = block.snapshot()
@@ -1644,7 +1667,7 @@ class FilterManager(Subdispatcher):
     @decode_arg('id_', quantity_decoder)
     def getFilterChanges(self, id_):
         if id_ not in self.filters:
-            raise BadRequestError('Unknown filter')
+            raise NotExistError('Unknown filter')
         filter_ = self.filters[id_]
         logger.debug('filter found', filter=filter_)
         if isinstance(filter_, (BlockFilter, PendingTransactionFilter)):

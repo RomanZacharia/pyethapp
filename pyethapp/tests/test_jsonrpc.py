@@ -240,19 +240,7 @@ def test_rpc_errors(test_app):
     assert chain.head_candidate.get_balance('\xff' * 20) == 0
     sender = test_app.services.accounts.unlocked_accounts[0].address
     assert chain.head_candidate.get_balance(sender) > 0
-    tx = {
-        'from': address_encoder(sender),
-        'to': address_encoder('\xff' * 20),
-        'value': quantity_encoder(1)
-    }
-    # res = data_decoder(test_app.rpc_request('eth_call', tx, 0x1))
 
-    # tr = type(res)
-
-    import pdb; pdb.set_trace()
-
-    # json01 = '{"id":4,"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x6295ee1b4f6dd65047762f924ecd367c17eabf8f","data":"0x12a7b914"},"0x8"]}'
-    # json01 = '{"id":4,"jsonrpc":"2.0","method":"eth_sendTransaction","params":['+json.dumps(tx)+']}'
     reqid += 1
     json02 = {
         "id": reqid,
@@ -263,18 +251,138 @@ def test_rpc_errors(test_app):
                 {
                     'from': address_encoder(sender),
                     'to': address_encoder('\xff' * 20),
-                    'gasPrice': '0x999999999999999999999999999999999999999999',
+                    'gas': '0x1',
+                    'gasPrice': '0x7777',
                     'value': quantity_encoder(100),
-                    'data': '12345'
                 }
             ]
     }
     response = test_app.dispatch(json.dumps(json02))
+    assert response['error']['code'] == 3
+    assert response['error']['data'][0]['code'] == 102
+
+    reqid += 1
+    json03 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params":
+            [
+                {
+                    'from': address_encoder(sender),
+                    'to': address_encoder('\xff' * 20),
+                    'gasPrice': '0x01',
+                    'value': quantity_encoder(100),
+                }
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json03))
 
     assert response['error']['code'] == 3
     assert response['error']['data'][0]['code'] == 104
-    # res = data_decoder(test_app.rpc_request('eth_getTransactionByHash', 0x1))
 
+    reqid += 1
+    json04 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params":
+            [
+                {
+                    'from': address_encoder(sender),
+                    'to': address_encoder('\xff' * 20),
+                    'gas': '0x1',
+                    'gasPrice': '0x0',
+                    'value': quantity_encoder(10000000),
+                }
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json04))
+    assert response['error']['code'] == 3
+    assert response['error']['data'][0]['code'] == 102
+
+    reqid += 1
+    json05 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params":
+            [
+                {
+                    'from': address_encoder(sender),
+                    'to': address_encoder('\xff' * 20),
+                    'gasPrice': '0x0',
+                    'value': quantity_encoder(10000000),
+                }
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json05))
+    assert 'result' in response.keys()
+
+    reqid += 1
+    json06 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_sendTransaction",
+        "params":
+            [
+                {
+                    'from': address_encoder(sender),
+                    'to': address_encoder('\xff' * 20),
+                    'value': quantity_encoder(1),
+                }
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json06))
+    assert 'result' in response.keys()
+
+    reqid += 1
+    json07 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_sendTransaction",
+        "params":
+            [
+                {
+                    'from': address_encoder(sender),
+                    'to': address_encoder('\xff' * 20),
+                    'gas': '0x300000',
+                    'gasPrice': '0x0',
+                    'value': quantity_encoder(1),
+                }
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json07))
+    assert 'result' in response.keys()
+
+    reqid += 1
+    json08 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params":
+            [
+                "earliest",
+                False
+            ]
+    }
+    response = test_app.dispatch(json.dumps(json08))
+    assert 'result' in response.keys()
+
+    reqid += 1
+    json09 = {
+        "id": reqid,
+        "jsonrpc": "2.0",
+        "method": "eth_getFilterChanges",
+        "params":
+            [
+                "0x12345" # invald filter id
+            ]
+    }
+
+    response = test_app.dispatch(json.dumps(json09))
+    assert response['error']['code'] == 3
+    assert response['error']['data'][0]['code'] == 100
 
 
 def test_send_transaction(test_app):
