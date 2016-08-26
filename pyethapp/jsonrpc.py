@@ -400,7 +400,6 @@ def address_decoder(data):
     """Decode an address from hex with 0x prefix to 20 bytes."""
     addr = data_decoder(data)
     if len(addr) not in (20, 0):
-        import pdb; pdb.set_trace()
         raise BadRequestError('Addresses must be 20 or 0 bytes long')
     return addr
 
@@ -1191,7 +1190,6 @@ class Chain(Subdispatcher):
         tx.sender = sender
 
         try:
-            import pdb; pdb.set_trace()
             success, output = processblock.apply_transaction(test_block, tx)
         except InvalidTransaction as e:
             success = False
